@@ -1,2 +1,701 @@
-class ChatClient{constructor(){this.currentUser=null;this.currentRecipient=null;this.socket=null;this.typingTimeout=null;this.lastSentMessageId=null;this.tempClearedMessages=null;this.initializeSocket();this.setupEventListeners()}initializeSocket(){this.socket=io();this.socket.on("connect",()=>{if(this.currentUser)this.socket.emit("user-online",this.currentUser.username)});this.socket.on("new-message",m=>{this.displayMessage(m);this.updateChatListUI()});this.socket.on("message-sent",m=>{this.displayMessage(m);this.updateChatListUI()});this.socket.on("message-status-update",d=>{this.updateMessageStatus(d.messageId,d.status)});this.socket.on("message-unsent",d=>{const m=document.querySelector(`[data-message-id="${d.messageId}"]`);if(m){const t=m.querySelector(".message-text");if(t)t.innerHTML="<em style='color:#999;'>This message was unsent</em>"}this.updateChatListUI()});this.socket.on("chat-cleared",d=>{this.tempClearedMessages=d;document.getElementById("messagesContainer").innerHTML="<div class='no-messages'>No messages yet. Start a conversation!</div>";this.showUndoNotification();this.updateChatListUI()});this.socket.on("chat-restored",d=>{if(this.currentRecipient===d.chatUser)this.loadChatMessages();this.tempClearedMessages=null;this.hideUndoNotification();this.updateChatListUI()});this.socket.on("user-typing",d=>{this.showTypingIndicator(d.username,d.isTyping)});this.socket.on("user-status-change",()=>this.updateChatListUI())}setupEventListeners(){const s=document.getElementById("signupFormElement"),q=document.getElementById("quickLoginForm"),e=document.getElementById("emailLoginFormElement");if(s)s.addEventListener("submit",x=>{x.preventDefault();this.handleRegistration()});if(q)q.addEventListener("submit",x=>{x.preventDefault();this.handleQuickLogin()});if(e)e.addEventListener("submit",x=>{x.preventDefault();this.handleEmailLogin()});const send=document.getElementById("sendBtn"),uns=document.getElementById("unsendMessageBtn"),msg=document.getElementById("messageInput"),search=document.getElementById("searchBtn"),logout=document.getElementById("logoutBtn"),menu=document.getElementById("chatMenuBtn"),clear=document.getElementById("clearChatBtn");if(send)send.onclick=()=>this.sendMessage();if(uns)uns.onclick=()=>this.unsendLastMessage();if(menu)menu.onclick=x=>{x.stopPropagation();this.toggleChatMenu()};if(clear)clear.onclick=()=>{this.clearChat();this.hideChatMenu()};if(search)search.onclick=()=>this.searchUsers();if(logout)logout.onclick=()=>this.logout();document.addEventListener("click",()=>this.hideChatMenu());if(msg)msg.addEventListener("keypress",x=>{if(x.key==="Enter")this.sendMessage();else this.handleTyping()});const sid=document.getElementById("quickLoginUserId");if(sid)this.setupStudentIdFormatting(sid);const si=document.getElementById("searchInput");if(si){this.setupStudentIdFormatting(si);si.addEventListener("keypress",x=>{if(x.key==="Enter")this.searchUsers()})}}async handleRegistration(){const u=document.getElementById("signupUsername").value.trim(),e=document.getElementById("signupEmail").value.trim(),p=document.getElementById("signupPassword").value;if(!u||!e||!p)return this.showStatus("Please fill in all fields","error");try{const r=await fetch("/api/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,email:e,password:p})}),d=await r.json();if(d.success){this.currentUser=d.user;window.chatClient=this;this.socket.emit("user-online",this.currentUser.username);this.showChatInterface();this.showStatus(d.message,"success")}else this.showStatus(d.error,"error")}catch{x=>this.showStatus("Registration failed.","error")}}async handleQuickLogin(){const id=document.getElementById("quickLoginUserId").value.trim();if(!id)return this.showStatus("Enter Student ID","error");try{const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userId:id})}),d=await r.json();if(d.success){this.currentUser=d.user;window.chatClient=this;this.socket.emit("user-online",this.currentUser.username);this.showChatInterface();this.showStatus(d.message,"success")}else this.showStatus(d.error,"error")}catch{x=>this.showStatus("Login failed.","error")}}async handleEmailLogin(){const e=document.getElementById("emailLoginEmail").value.trim(),p=document.getElementById("emailLoginPassword").value;if(!e||!p)return this.showStatus("Fill all fields","error");try{const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:e,password:p})}),d=await r.json();if(d.success){this.currentUser=d.user;window.chatClient=this;this.socket.emit("user-online",this.currentUser.username);this.showChatInterface();this.showStatus(d.message,"success")}else this.showStatus(d.error,"error")}catch{x=>this.showStatus("Login failed.","error")}}async startChat(u){if(!this.currentUser)return this.showStatus("Login first","error");this.currentRecipient=u;await fetch(`/api/messages/${this.getChatId(this.currentUser.username,u)}`);document.getElementById("chatUsername").textContent=`Chat with ${u}`;document.getElementById("chatHeader").style.display="flex";document.getElementById("chatInput").style.display="block";document.getElementById("messageInput").disabled=false;document.getElementById("sendBtn").disabled=false;document.getElementById("messageInput").focus();document.getElementById("searchResults").innerHTML="";await this.loadChatMessages();await this.updateChatListUI();this.showStatus(`Started chat with ${u}`,"success")}async loadChatMessages(){if(!this.currentRecipient)return;const c=document.getElementById("messagesContainer");c.innerHTML="";try{const r=await fetch(`/api/messages/${this.getChatId(this.currentUser.username,this.currentRecipient)}`),d=await r.json(),m=d.messages||d;if(m.length===0){c.innerHTML="<div class='no-messages'>No messages yet.</div>";return}m.forEach(x=>this.displayMessage(x));c.scrollTop=c.scrollHeight}catch(x){}}displayMessage(m){const c=document.getElementById("messagesContainer"),d=document.createElement("div");d.className=`message ${m.from===this.currentUser.username?"own":"received"}`;d.dataset.messageId=m.id;d.innerHTML=`<div class="message-avatar">${m.from[0].toUpperCase()}</div><div class="message-content"><div class="message-bubble"><div class="message-text">${m.text}</div><div class="message-meta"><span class="message-time">${new Date(m.timestamp).toLocaleTimeString()}</span></div></div></div>`;c.appendChild(d);c.scrollTop=c.scrollHeight}
-updateMessageStatus(id,s){const m=document.querySelector(`[data-message-id="${id}"]`);if(!m)return;let el=m.querySelector(".message-status");if(!el){el=document.createElement("span");el.className="message-status";m.querySelector(".message-meta").appendChild(el)}el.textContent=s}sendMessage(){const i=document.getElementById("messageInput"),t=i.value.trim();if(!t||!this.currentRecipient)return;const id="msg_"+Date.now()+"_"+Math.random().toString(36).substr(2,9);this.socket.emit("send-message",{from:this.currentUser.username,to:this.currentRecipient,text:t,messageId:id});this.lastSentMessageId=id;i.value="";this.stopTyping()}unsendLastMessage(){if(!this.lastSentMessageId)return;this.socket.emit("unsend-message",{messageId:this.lastSentMessageId,from:this.currentUser.username,to:this.currentRecipient});this.lastSentMessageId=null}async searchUsers(){const q=document.getElementById("searchInput").value.trim();if(!q)return;try{const r=await fetch(`/api/users/search?query=${encodeURIComponent(q)}&currentUser=${encodeURIComponent(this.currentUser.username)}`),d=await r.json();this.displaySearchResults(d)}catch(x){}}displaySearchResults(r){const c=document.getElementById("searchResults");c.innerHTML="";if(r.length===0){c.innerHTML="<div style='padding:1rem;text-align:center;color:#666;'>No users found</div>";return}r.forEach(u=>{const d=document.createElement("div");d.className="search-result-item";d.innerHTML=`<div><div style="font-weight:bold;">${u.username}</div><div style="font-size:0.8rem;color:#666;">Student ID: ${u.userId}</div></div><button class="add-user-btn" onclick="chatClient.startChat('${u.username}')">Chat</button>`;c.appendChild(d)})}handleTyping(){if(!this.currentRecipient)return;this.socket.emit("typing-start",{from:this.currentUser.username,to:this.currentRecipient});clearTimeout(this.typingTimeout);this.typingTimeout=setTimeout(()=>this.stopTyping(),3000)}stopTyping(){if(!this.currentRecipient)return;this.socket.emit("typing-stop",{from:this.currentUser.username,to:this.currentRecipient})}showTypingIndicator(u,b){const t=document.getElementById("typingIndicator");if(b){t.innerHTML=`${u} is typing...`;t.style.display="block"}else t.style.display="none"}async updateChatListUI(){if(!this.currentUser)return;try{const r=await fetch(`/api/chats/${this.currentUser.username}`),d=await r.json(),c=d.chats||d,l=document.getElementById("userList");l.innerHTML="";c.forEach(ch=>{const li=document.createElement("li");li.className="user-item";li.onclick=()=>this.startChat(ch.username);li.innerHTML=`<div class="chat-item-header"><div class="chat-item-avatar">${ch.username[0]}</div><div class="chat-item-info"><div class="chat-item-name">${ch.username}</div><div class="chat-item-preview">${ch.lastMessage||""}</div></div></div>`;l.appendChild(li)})}catch(x){}}clearChat(){this.socket.emit("clear-chat",{username:this.currentUser.username,chatUser:this.currentRecipient})}undoClearChat(){this.socket.emit("undo-clear-chat",{username:this.currentUser.username,chatUser:this.currentRecipient})}showUndoNotification(){document.getElementById("undoNotification").style.display="block"}hideUndoNotification(){document.getElementById("undoNotification").style.display="none"}showChatInterface(){document.getElementById("authScreen").style.display="none";document.getElementById("mainApp").style.display="flex";document.getElementById("currentUsername").textContent=this.currentUser.username;document.getElementById("currentUserId").textContent=this.currentUser.userId;document.getElementById("currentUserAvatar").textContent=this.currentUser.username[0].toUpperCase();setTimeout(()=>this.updateChatListUI(),300)}logout(){this.currentUser=null;this.currentRecipient=null;document.getElementById("authScreen").style.display="flex";document.getElementById("mainApp").style.display="none";document.getElementById("quickLoginUserId").value="";document.getElementById("signupEmail").value="";document.getElementById("signupUsername").value="";document.getElementById("signupPassword").value="";document.getElementById("emailLoginEmail").value="";document.getElementById("emailLoginPassword").value="";this.showStatus("Logged out","success")}showStatus(m,t="info"){const el=document.getElementById("statusMessage");el.textContent=m;el.className=`status-message status-${t}`;el.style.display="block";setTimeout(()=>el.style.display="none",5000)}getChatId(a,b){return[a,b].sort().join("_")}}let chatClient;document.addEventListener("DOMContentLoaded",()=>{chatClient=new ChatClient()});
+class ChatClient {
+    constructor() {
+        this.currentUser = null;
+        this.currentRecipient = null;
+        this.socket = null;
+        this.typingTimeout = null;
+        this.lastSentMessageId = null;
+        this.tempClearedMessages = null;
+
+        this.initializeSocket();
+        this.initAuthUI();
+        this.setupEventListeners();
+    }
+
+    initializeSocket() {
+        this.socket = io();
+
+        this.socket.on("connect", () => {
+            if (this.currentUser) {
+                this.socket.emit("user-online", this.currentUser.username);
+            }
+        });
+
+        this.socket.on("new-message", (message) => {
+            this.displayMessage(message);
+            this.updateChatListUI();
+        });
+
+        this.socket.on("message-sent", (message) => {
+            this.displayMessage(message);
+            this.updateChatListUI();
+        });
+
+        this.socket.on("message-status-update", (data) => {
+            this.updateMessageStatus(data.messageId, data.status);
+        });
+
+        this.socket.on("message-unsent", (data) => {
+            const messageElement = document.querySelector(
+                `[data-message-id="${data.messageId}"]`
+            );
+            if (messageElement) {
+                const textElement =
+                    messageElement.querySelector(".message-text");
+                if (textElement) {
+                    textElement.innerHTML =
+                        "<em style='color:#999;'>This message was unsent</em>";
+                }
+            }
+            this.updateChatListUI();
+        });
+
+        this.socket.on("chat-cleared", (data) => {
+            this.tempClearedMessages = data;
+            const container = document.getElementById("messagesContainer");
+            container.innerHTML =
+                "<div class='no-messages'>No messages yet. Start a conversation!</div>";
+            this.showUndoNotification();
+            this.updateChatListUI();
+        });
+
+        this.socket.on("chat-restored", (data) => {
+            if (this.currentRecipient === data.chatUser) {
+                this.loadChatMessages();
+            }
+            this.tempClearedMessages = null;
+            this.hideUndoNotification();
+            this.updateChatListUI();
+        });
+
+        this.socket.on("user-typing", (data) => {
+            this.showTypingIndicator(data.username, data.isTyping);
+        });
+
+        this.socket.on("user-status-change", () => {
+            this.updateChatListUI();
+        });
+    }
+
+    initAuthUI() {
+        const loginForm = document.getElementById("loginForm");
+        const signupForm = document.getElementById("signupForm");
+        const emailLoginForm = document.getElementById("emailLoginForm");
+
+        const showSignup = document.getElementById("showSignup");
+        const showEmailLogin = document.getElementById("showEmailLogin");
+        const showLogin = document.getElementById("showLogin");
+        const showLoginFromEmail =
+            document.getElementById("showLoginFromEmail");
+        const showSignupFromEmail =
+            document.getElementById("showSignupFromEmail");
+
+        const generatedIdSpan = document.getElementById("generatedId");
+
+        const switchToLogin = () => {
+            loginForm.classList.remove("hidden");
+            signupForm.classList.add("hidden");
+            emailLoginForm.classList.add("hidden");
+        };
+
+        const switchToSignup = () => {
+            loginForm.classList.add("hidden");
+            signupForm.classList.remove("hidden");
+            emailLoginForm.classList.add("hidden");
+            if (generatedIdSpan) {
+                const newId =
+                    "USR-" +
+                    Math.random().toString(36).substr(2, 5).toUpperCase();
+                generatedIdSpan.textContent = newId;
+            }
+        };
+
+        const switchToEmailLogin = () => {
+            loginForm.classList.add("hidden");
+            signupForm.classList.add("hidden");
+            emailLoginForm.classList.remove("hidden");
+        };
+
+        if (showSignup) {
+            showSignup.addEventListener("click", (e) => {
+                e.preventDefault();
+                switchToSignup();
+            });
+        }
+
+        if (showEmailLogin) {
+            showEmailLogin.addEventListener("click", (e) => {
+                e.preventDefault();
+                switchToEmailLogin();
+            });
+        }
+
+        if (showLogin) {
+            showLogin.addEventListener("click", (e) => {
+                e.preventDefault();
+                switchToLogin();
+            });
+        }
+
+        if (showLoginFromEmail) {
+            showLoginFromEmail.addEventListener("click", (e) => {
+                e.preventDefault();
+                switchToLogin();
+            });
+        }
+
+        if (showSignupFromEmail) {
+            showSignupFromEmail.addEventListener("click", (e) => {
+                e.preventDefault();
+                switchToSignup();
+            });
+        }
+    }
+
+    setupEventListeners() {
+        const signupForm = document.getElementById("signupFormElement");
+        const quickLoginForm = document.getElementById("quickLoginForm");
+        const emailLoginForm = document.getElementById(
+            "emailLoginFormElement"
+        );
+
+        if (signupForm) {
+            signupForm.addEventListener("submit", (e) => {
+                e.preventDefault();
+                this.handleRegistration();
+            });
+        }
+
+        if (quickLoginForm) {
+            quickLoginForm.addEventListener("submit", (e) => {
+                e.preventDefault();
+                this.handleQuickLogin();
+            });
+        }
+
+        if (emailLoginForm) {
+            emailLoginForm.addEventListener("submit", (e) => {
+                e.preventDefault();
+                this.handleEmailLogin();
+            });
+        }
+
+        const sendBtn = document.getElementById("sendBtn");
+        const unsendBtn = document.getElementById("unsendMessageBtn");
+        const messageInput = document.getElementById("messageInput");
+        const searchBtn = document.getElementById("searchBtn");
+        const logoutBtn = document.getElementById("logoutBtn");
+        const chatMenuBtn = document.getElementById("chatMenuBtn");
+        const clearChatBtn = document.getElementById("clearChatBtn");
+        const undoBtn = document.getElementById("undoBtn");
+
+        if (sendBtn) {
+            sendBtn.addEventListener("click", () => this.sendMessage());
+        }
+
+        if (unsendBtn) {
+            unsendBtn.addEventListener("click", () => this.unsendLastMessage());
+        }
+
+        if (chatMenuBtn) {
+            chatMenuBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.toggleChatMenu();
+            });
+        }
+
+        if (clearChatBtn) {
+            clearChatBtn.addEventListener("click", () => {
+                this.clearChat();
+                this.hideChatMenu();
+            });
+        }
+
+        if (undoBtn) {
+            undoBtn.addEventListener("click", () => {
+                this.undoClearChat();
+            });
+        }
+
+        if (searchBtn) {
+            searchBtn.addEventListener("click", () => this.searchUsers());
+        }
+
+        if (logoutBtn) {
+            logoutBtn.addEventListener("click", () => this.logout());
+        }
+
+        document.addEventListener("click", () => this.hideChatMenu());
+
+        if (messageInput) {
+            messageInput.addEventListener("keypress", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    this.sendMessage();
+                } else {
+                    this.handleTyping();
+                }
+            });
+        }
+
+        const studentIdInput = document.getElementById("quickLoginUserId");
+        if (studentIdInput) {
+            this.setupStudentIdFormatting(studentIdInput);
+        }
+
+        const searchInput = document.getElementById("searchInput");
+        if (searchInput) {
+            this.setupStudentIdFormatting(searchInput);
+            searchInput.addEventListener("keypress", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    this.searchUsers();
+                }
+            });
+        }
+    }
+
+    setupStudentIdFormatting(input) {
+        input.addEventListener("input", () => {
+            let v = input.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+            if (!v.startsWith("USR")) {
+                v = "USR" + v.replace(/^USR/, "");
+            }
+            if (v.length > 3) {
+                v = v.slice(0, 3) + "-" + v.slice(3, 8);
+            }
+            input.value = v;
+        });
+    }
+
+    toggleChatMenu() {
+        const menu = document.getElementById("chatMenu");
+        if (!menu) return;
+        menu.style.display =
+            menu.style.display === "block" ? "none" : "block";
+    }
+
+    hideChatMenu() {
+        const menu = document.getElementById("chatMenu");
+        if (!menu) return;
+        menu.style.display = "none";
+    }
+
+    showUndoNotification() {
+        const el = document.getElementById("undoNotification");
+        if (!el) return;
+        el.style.display = "block";
+    }
+
+    hideUndoNotification() {
+        const el = document.getElementById("undoNotification");
+        if (!el) return;
+        el.style.display = "none";
+    }
+
+    async handleRegistration() {
+        const username = document
+            .getElementById("signupUsername")
+            .value.trim();
+        const email = document.getElementById("signupEmail").value.trim();
+        const password =
+            document.getElementById("signupPassword").value || "";
+
+        if (!username || !email || !password) {
+            this.showStatus("Please fill in all fields", "error");
+            return;
+        }
+
+        try {
+            const res = await fetch("/api/register", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, email, password })
+            });
+
+            const data = await res.json();
+
+            if (data.success) {
+                this.currentUser = data.user;
+                window.chatClient = this;
+                this.socket.emit("user-online", this.currentUser.username);
+                this.showChatInterface();
+                this.showStatus(data.message || "Account created", "success");
+            } else {
+                this.showStatus(data.error || "Registration failed", "error");
+            }
+        } catch (err) {
+            this.showStatus("Registration failed.", "error");
+        }
+    }
+
+    async handleQuickLogin() {
+        const userId =
+            document.getElementById("quickLoginUserId").value.trim();
+
+        if (!userId) {
+            this.showStatus("Enter Student ID", "error");
+            return;
+        }
+        try {
+            const res = await fetch("/api/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ userId })
+            });
+
+            const data = await res.json();
+
+            if (data.success) {
+                this.currentUser = data.user;
+                window.chatClient = this;
+                this.socket.emit("user-online", this.currentUser.username);
+                this.showChatInterface();
+                this.showStatus(data.message || "Login successful", "success");
+            } else {
+                this.showStatus(data.error || "Login failed", "error");
+            }
+        } catch (err) {
+            this.showStatus("Login failed.", "error");
+        }
+    }
+
+    async handleEmailLogin() {
+        const email = document.getElementById("emailLoginEmail").value.trim();
+        const password = document.getElementById("emailLoginPassword").value;
+
+        if (!email || !password) {
+            this.showStatus("Fill all fields", "error");
+            return;
+        }
+
+        try {
+            const res = await fetch("/api/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, password })
+            });
+
+            const data = await res.json();
+
+            if (data.success) {
+                this.currentUser = data.user;
+                window.chatClient = this;
+                this.socket.emit("user-online", this.currentUser.username);
+                this.showChatInterface();
+                this.showStatus(data.message || "Login successful", "success");
+            } else {
+                this.showStatus(data.error || "Login failed", "error");
+            }
+        } catch (err) {
+            this.showStatus("Login failed.", "error");
+        }
+    }
+
+    async startChat(username) {
+        if (!this.currentUser) {
+            this.showStatus("Login first", "error");
+            return;
+        }
+
+        this.currentRecipient = username;
+
+        document.getElementById("chatUsername").textContent =
+            `Chat with ${username}`;
+        document.getElementById("chatHeader").style.display = "flex";
+        document.getElementById("chatInput").style.display = "block";
+        document.getElementById("messageInput").disabled = false;
+        document.getElementById("sendBtn").disabled = false;
+        document.getElementById("messageInput").focus();
+
+        document.getElementById("searchResults").innerHTML = "";
+
+        await this.loadChatMessages();
+        await this.updateChatListUI();
+
+        this.showStatus(`Started chat with ${username}`, "success");
+    }
+
+    async loadChatMessages() {
+        if (!this.currentRecipient) return;
+
+        const container = document.getElementById("messagesContainer");
+        container.innerHTML = "";
+
+        try {
+            const res = await fetch(
+                `/api/messages/${this.getChatId(
+                    this.currentUser.username,
+                    this.currentRecipient
+                )}`
+            );
+
+            const data = await res.json();
+            const messages = data.messages || data;
+
+            if (messages.length === 0) {
+                container.innerHTML =
+                    "<div class='no-messages'>No messages yet.</div>";
+                return;
+            }
+
+            messages.forEach((msg) => this.displayMessage(msg));
+            container.scrollTop = container.scrollHeight;
+        } catch (err) {}
+    }
+
+    displayMessage(message) {
+        const container = document.getElementById("messagesContainer");
+
+        const div = document.createElement("div");
+        div.className =
+            "message " +
+            (message.from === this.currentUser.username ? "own" : "received");
+        div.dataset.messageId = message.id;
+
+        div.innerHTML = `
+            <div class="message-avatar">
+                ${message.from[0].toUpperCase()}
+            </div>
+            <div class="message-content">
+                <div class="message-bubble">
+                    <div class="message-text">${message.text}</div>
+                    <div class="message-meta">
+                        <span class="message-time">
+                            ${new Date(message.timestamp).toLocaleTimeString()}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    updateMessageStatus(id, status) {
+        const msg = document.querySelector(`[data-message-id="${id}"]`);
+        if (!msg) return;
+
+        let el = msg.querySelector(".message-status");
+        if (!el) {
+            el = document.createElement("span");
+            el.className = "message-status";
+            msg.querySelector(".message-meta").appendChild(el);
+        }
+
+        el.textContent = status;
+    }
+
+    sendMessage() {
+        const input = document.getElementById("messageInput");
+        const text = input.value.trim();
+
+        if (!text || !this.currentRecipient) return;
+
+        const id =
+            "msg_" +
+            Date.now() +
+            "_" +
+            Math.random().toString(36).substr(2, 9);
+
+        this.socket.emit("send-message", {
+            from: this.currentUser.username,
+            to: this.currentRecipient,
+            text,
+            messageId: id
+        });
+
+        this.lastSentMessageId = id;
+        input.value = "";
+        this.stopTyping();
+    }
+
+    unsendLastMessage() {
+        if (!this.lastSentMessageId) return;
+
+        this.socket.emit("unsend-message", {
+            messageId: this.lastSentMessageId,
+            from: this.currentUser.username,
+            to: this.currentRecipient
+        });
+
+        this.lastSentMessageId = null;
+    }
+
+    async searchUsers() {
+        const q = document.getElementById("searchInput").value.trim();
+        if (!q) return;
+
+        try {
+            const res = await fetch(
+                `/api/users/search?query=${encodeURIComponent(
+                    q
+                )}&currentUser=${encodeURIComponent(
+                    this.currentUser.username
+                )}`
+            );
+
+            const data = await res.json();
+            this.displaySearchResults(data);
+        } catch (err) {}
+    }
+
+    displaySearchResults(results) {
+        const container = document.getElementById("searchResults");
+        container.innerHTML = "";
+
+        if (results.length === 0) {
+            container.innerHTML =
+                "<div style='padding:1rem;text-align:center;color:#666;'>No users found</div>";
+            return;
+        }
+
+        results.forEach((u) => {
+            const div = document.createElement("div");
+            div.className = "search-result-item";
+
+            div.innerHTML = `
+                <div>
+                    <div style="font-weight:bold;">${u.username}</div>
+                    <div style="font-size:0.8rem;color:#666;">Student ID: ${u.userId}</div>
+                </div>
+                <button class="add-user-btn" onclick="chatClient.startChat('${u.username}')">Chat</button>
+            `;
+
+            container.appendChild(div);
+        });
+    }
+
+    handleTyping() {
+        if (!this.currentRecipient) return;
+
+        this.socket.emit("typing-start", {
+            from: this.currentUser.username,
+            to: this.currentRecipient
+        });
+
+        clearTimeout(this.typingTimeout);
+
+        this.typingTimeout = setTimeout(() => this.stopTyping(), 3000);
+    }
+
+    stopTyping() {
+        if (!this.currentRecipient) return;
+
+        this.socket.emit("typing-stop", {
+            from: this.currentUser.username,
+            to: this.currentRecipient
+        });
+    }
+
+    showTypingIndicator(username, isTyping) {
+        const el = document.getElementById("typingIndicator");
+
+        if (isTyping) {
+            el.innerHTML = `${username} is typing...`;
+            el.style.display = "block";
+        } else {
+            el.style.display = "none";
+        }
+    }
+
+    async updateChatListUI() {
+        if (!this.currentUser) return;
+
+        try {
+            const res = await fetch(`/api/chats/${this.currentUser.username}`);
+            const data = await res.json();
+            const chats = data.chats || data;
+
+            const list = document.getElementById("userList");
+            list.innerHTML = "";
+
+            chats.forEach((ch) => {
+                const li = document.createElement("li");
+                li.className = "user-item";
+                li.onclick = () => this.startChat(ch.username);
+
+                li.innerHTML = `
+                    <div class="chat-item-header">
+                        <div class="chat-item-avatar">${ch.username[0]}</div>
+                        <div class="chat-item-info">
+                            <div class="chat-item-name">${ch.username}</div>
+                            <div class="chat-item-preview">${ch.lastMessage || ""}</div>
+                        </div>
+                    </div>
+                `;
+
+                list.appendChild(li);
+            });
+        } catch (err) {}
+    }
+
+    clearChat() {
+        this.socket.emit("clear-chat", {
+            username: this.currentUser.username,
+            chatUser: this.currentRecipient
+        });
+    }
+
+    undoClearChat() {
+        this.socket.emit("undo-clear-chat", {
+            username: this.currentUser.username,
+            chatUser: this.currentRecipient
+        });
+    }
+
+    showChatInterface() {
+        document.getElementById("authScreen").style.display = "none";
+        document.getElementById("mainApp").style.display = "flex";
+
+        document.getElementById("currentUsername").textContent =
+            this.currentUser.username;
+        document.getElementById("currentUserId").textContent =
+            this.currentUser.userId;
+        document.getElementById("currentUserAvatar").textContent =
+            this.currentUser.username[0].toUpperCase();
+
+        setTimeout(() => this.updateChatListUI(), 300);
+    }
+
+    logout() {
+        this.currentUser = null;
+        this.currentRecipient = null;
+
+        document.getElementById("authScreen").style.display = "flex";
+        document.getElementById("mainApp").style.display = "none";
+
+        document.getElementById("quickLoginUserId").value = "";
+        document.getElementById("signupEmail").value = "";
+        document.getElementById("signupUsername").value = "";
+        document.getElementById("signupPassword").value = "";
+        document.getElementById("emailLoginEmail").value = "";
+        document.getElementById("emailLoginPassword").value = "";
+
+        this.showStatus("Logged out", "success");
+    }
+
+    showStatus(message, type = "info") {
+        const el = document.getElementById("statusMessage");
+        el.textContent = message;
+        el.className = `status-message status-${type}`;
+        el.style.display = "block";
+
+        setTimeout(() => {
+            el.style.display = "none";
+        }, 5000);
+    }
+
+    getChatId(a, b) {
+        return [a, b].sort().join("_");
+    }
+}
+
+let chatClient;
+
+document.addEventListener("DOMContentLoaded", () => {
+    chatClient = new ChatClient();
+});
+
+        
