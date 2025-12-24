@@ -886,18 +886,19 @@
         }
 
         .unsend-btn {
-            display: none;
-            padding: 0.75rem 1rem;
-            background: #dc3545;
-            color: white;
-            border: none;
-            border-radius: 20px;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: background 0.2s;
-            margin-left: 0.5rem;
-        }
+    display: inline-block;
+    padding: 0.75rem 1rem;
+    background: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.8rem;
+    transition: background 0.2s;
+    margin-left: 0.5rem;
+}
+
 
         .unsend-btn:hover {
             background: #c82333;
@@ -968,6 +969,47 @@
             }
         }
     </style>
+    /* MOBILE FIXES */
+html, body {
+    height: 100%;
+    overflow: hidden;
+}
+
+#mainApp {
+    height: 100%;
+    overflow: hidden;
+}
+
+.chat-area {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+#messagesContainer {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 80px;
+}
+
+#chatInput {
+    position: fixed;
+    bottom: 0;
+    left: 280px;
+    right: 0;
+    background: white;
+    padding: 10px;
+    border-top: 1px solid #ddd;
+}
+
+@media (max-width: 768px) {
+    #chatInput {
+        left: 0;
+        width: 100%;
+    }
+}
+
 </head>
 <body>
     <!-- Authentication Screen -->
