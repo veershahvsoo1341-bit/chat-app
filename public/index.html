@@ -522,13 +522,19 @@
 
         /* Chat Area */
         .chat-area {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: #f0f2f5;
-            min-width: 0;
-            width: calc(100% - 280px);
-        }
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #f0f2f5;
+    min-width: 0;
+    width: 100%; /* FIXED */
+}
+.app-container {
+    display: flex;
+    height: 100vh;
+    width: 100%;
+}
+
 
         .chat-header {
             display: none;
