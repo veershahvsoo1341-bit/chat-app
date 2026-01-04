@@ -163,8 +163,9 @@ app.get('/api/users/search', (req, res) => {
 
 app.get('/api/messages/:chatId', (req, res) => {
     const { chatId } = req.params;
-    const chatMessages = messages.filter(msg => msg.chatId === chatId)
-                                .sort((a, b) => a.timestamp - b.timestamp);
+    const chatMessages = messages
+        .filter(msg => msg.chatId === chatId)
+        .sort((a, b) => a.timestamp - b.timestamp);
     res.json(chatMessages);
 });
 
@@ -211,7 +212,10 @@ io.on('connection', (socket) => {
             timestamp: Date.now(),
             chatId: getChatId(from, to),
             status: 'sent',
-            isUnsent: false
+            isUnsent: false,
+            isEdited: false,
+            editedAt: null,
+            reactions: [] // { user, reaction }
         };
         
         messages.push(message);
@@ -247,6 +251,71 @@ io.on('connection', (socket) => {
         // Send back to sender
         socket.emit('message-sent', message);
         
+        saveData();
+    });
+
+    // EDIT MESSAGE (for owner, visible to both)
+    socket.on('edit-message', (data) => {
+        const { messageId, from, to, newText } = data;
+        const message = messages.find(msg => msg.id === messageId);
+        if (!message) return;
+        if (message.from !== from) return; // only sender can edit
+
+        message.text = newText;
+        message.isEdited = true;
+        message.editedAt = Date.now();
+
+        const recipientSocketId = onlineUsers.get(to);
+
+        // Notify both sides
+        socket.emit('message-edited', { messageId, newText, editedAt: message.editedAt });
+        if (recipientSocketId) {
+            io.to(recipientSocketId).emit('message-edited', { messageId, newText, editedAt: message.editedAt });
+        }
+
+        // Update chat lists
+        updateChatList(from, to, message);
+        updateChatList(to, from, message);
+
+        saveData();
+    });
+
+    // REACTION TO MESSAGE
+    socket.on('react-message', (data) => {
+        const { messageId, from, to, reaction } = data;
+        const message = messages.find(msg => msg.id === messageId);
+        if (!message) return;
+
+        if (!Array.isArray(message.reactions)) {
+            message.reactions = [];
+        }
+
+        // Toggle reaction from this user
+        const existingIndex = message.reactions.findIndex(r => r.user === from);
+        if (existingIndex !== -1) {
+            if (message.reactions[existingIndex].reaction === reaction) {
+                // same reaction → remove
+                message.reactions.splice(existingIndex, 1);
+            } else {
+                // update reaction
+                message.reactions[existingIndex].reaction = reaction;
+            }
+        } else {
+            message.reactions.push({ user: from, reaction });
+        }
+
+        const recipientSocketId = onlineUsers.get(to);
+
+        const payload = {
+            messageId,
+            reactions: message.reactions
+        };
+
+        socket.emit('message-reacted', payload);
+        if (recipientSocketId) {
+            io.to(recipientSocketId).emit('message-reacted', payload);
+        }
+
         saveData();
     });
     
@@ -303,14 +372,15 @@ io.on('connection', (socket) => {
         saveData();
     });
     
+    // RESTORE CHAT (used by undo button)
     socket.on('restore-chat', (data) => {
         const { username, chatUser, clearedMessages } = data;
         
-        // Restore messages (they were never actually deleted from server)
+        // Restore messages on client (messages were never deleted server-side)
         socket.emit('chat-restored', { chatUser, messages: clearedMessages });
         
         // Update chat list with last message
-        if (clearedMessages.length > 0) {
+        if (clearedMessages && clearedMessages.length > 0) {
             const lastMessage = clearedMessages[clearedMessages.length - 1];
             updateChatList(username, chatUser, lastMessage);
         }
