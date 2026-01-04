@@ -4,7 +4,7 @@ const socketIo = require('socket.io');
 const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs'); // for existsSync, mkdirSync
-const multer = require('multer');
+//const multer = require('multer');
 
 const app = express();
 const server = http.createServer(app);
