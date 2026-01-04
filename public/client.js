@@ -1,339 +1,315 @@
-/*  ============================
-    ChatClient — Enhanced Version
-    ============================ */
+/* client.js — cleaned, optimized, WhatsApp-style client
+   Compatible with the provided index.html and server socket events.
+*/
 
 class ChatClient {
     constructor() {
+        // State
+        this.socket = io();
         this.currentUser = null;
-        this.currentRecipient = null;   // direct chat username
-        this.currentGroup = null;       // current groupId
-        this.socket = null;
-        this.typingTimeout = null;
+        this.currentRecipient = null;
+        this.currentGroup = null;
+        this.groups = [];
+        this.darkMode = false;
+        this.profileImageUrl = null;
         this.lastSentMessageId = null;
+        this.typingTimeout = null;
+        this.reactionSet = ["👍","❤️","😂","😮","😢","😡"];
         this.tempClearedMessages = null;
 
-        // New state
-        this.groups = [];               // list of groups for the user
-        this.darkMode = false;
-        this.reactionSet = ["❤️", "👍", "😂", "😮", "😢", "😡"];
+        // DOM refs
+        this.$ = (id) => document.getElementById(id);
+        this.elements = {
+            authScreen: this.$("authScreen"),
+            mainApp: this.$("mainApp"),
+            quickLoginForm: this.$("quickLoginForm"),
+            signupFormElement: this.$("signupFormElement"),
+            emailLoginFormElement: this.$("emailLoginFormElement"),
+            showSignup: this.$("showSignup"),
+            showLogin: this.$("showLogin"),
+            showEmailLogin: this.$("showEmailLogin"),
+            showLoginFromEmail: this.$("showLoginFromEmail"),
+            showSignupFromEmail: this.$("showSignupFromEmail"),
+            generatedId: this.$("generatedId"),
+            searchInput: this.$("searchInput"),
+            searchBtn: this.$("searchBtn"),
+            searchResults: this.$("searchResults"),
+            userList: this.$("userList"),
+            groupList: this.$("groupList"),
+            messagesContainer: this.$("messagesContainer"),
+            chatHeader: this.$("chatHeader"),
+            chatUsername: this.$("chatUsername"),
+            chatMenuBtn: this.$("chatMenuBtn"),
+            chatMenu: this.$("chatMenu"),
+            clearChatBtn: this.$("clearChatBtn"),
+            typingIndicator: this.$("typingIndicator"),
+            messageInput: this.$("messageInput"),
+            sendBtn: this.$("sendBtn"),
+            unsendMessageBtn: this.$("unsendMessageBtn"),
+            undoNotification: this.$("undoNotification"),
+            undoBtn: this.$("undoBtn"),
+            undoCountdown: this.$("undoCountdown"),
+            statusMessage: this.$("statusMessage"),
+            currentUserAvatar: this.$("currentUserAvatar"),
+            currentUsername: this.$("currentUsername"),
+            currentUserId: this.$("currentUserId"),
+            logoutBtn: this.$("logoutBtn")
+        };
 
-        this.initializeSocket();
-        this.initAuthUI();
-        this.setupEventListeners();
+        // Bind UI events
+        this.bindUI();
+
+        // Socket events
+        this.bindSocket();
+
+        // Small helpers
+        this.showStatus("Ready", "info");
     }
 
-    /* ============================
-       SOCKET INITIALIZATION
-       ============================ */
-    initializeSocket() {
-        this.socket = io();
+    bindUI() {
+        // Auth toggles
+        if (this.elements.showSignup) this.elements.showSignup.onclick = (e) => { e.preventDefault(); this.toggleAuth("signup"); };
+        if (this.elements.showLogin) this.elements.showLogin.onclick = (e) => { e.preventDefault(); this.toggleAuth("login"); };
+        if (this.elements.showEmailLogin) this.elements.showEmailLogin.onclick = (e) => { e.preventDefault(); this.toggleAuth("email"); };
+        if (this.elements.showLoginFromEmail) this.elements.showLoginFromEmail.onclick = (e) => { e.preventDefault(); this.toggleAuth("login"); };
+        if (this.elements.showSignupFromEmail) this.elements.showSignupFromEmail.onclick = (e) => { e.preventDefault(); this.toggleAuth("signup"); };
 
-        this.socket.on("connect", () => {
-            if (this.currentUser) {
-                this.socket.emit("user-online", this.currentUser.username);
-            }
-        });
+        // Forms
+        if (this.elements.quickLoginForm) {
+            this.elements.quickLoginForm.onsubmit = async (e) => {
+                e.preventDefault();
+                await this.handleQuickLogin();
+            };
+        }
+        if (this.elements.signupFormElement) {
+            this.elements.signupFormElement.onsubmit = async (e) => {
+                e.preventDefault();
+                await this.handleRegistration();
+            };
+        }
+        if (this.elements.emailLoginFormElement) {
+            this.elements.emailLoginFormElement.onsubmit = async (e) => {
+                e.preventDefault();
+                await this.handleEmailLogin();
+            };
+        }
 
-        /* ----- DIRECT MESSAGES ----- */
-        this.socket.on("new-message", (message) => {
-            const isActiveChat =
-                (this.currentRecipient === message.from && !message.isGroup) ||
-                (this.currentRecipient === message.to && !message.isGroup);
-            if (isActiveChat && !this.currentGroup) {
-                this.displayMessage(message);
-            }
-            this.updateChatListUI();
-        });
+        // Search
+        if (this.elements.searchBtn) this.elements.searchBtn.onclick = () => this.searchUsers();
+        if (this.elements.searchInput) {
+            this.elements.searchInput.onkeyup = (e) => {
+                if (e.key === "Enter") this.searchUsers();
+            };
+        }
 
-        this.socket.on("message-sent", (message) => {
-            const isActiveChat =
-                (this.currentRecipient === message.to && !message.isGroup) ||
-                (this.currentRecipient === message.from && !message.isGroup);
-            if (isActiveChat && !this.currentGroup) {
-                this.displayMessage(message);
-            }
-            this.updateChatListUI();
-        });
+        // Chat menu
+        if (this.elements.chatMenuBtn) {
+            this.elements.chatMenuBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.elements.chatMenu.style.display = this.elements.chatMenu.style.display === "block" ? "none" : "block";
+            };
+            document.addEventListener("click", () => { if (this.elements.chatMenu) this.elements.chatMenu.style.display = "none"; });
+        }
+        if (this.elements.clearChatBtn) this.elements.clearChatBtn.onclick = () => this.clearChat();
 
-        this.socket.on("message-status-update", (data) => {
-            this.updateMessageStatus(data.messageId, data.status);
-        });
+        // Message input
+        if (this.elements.messageInput) {
+            this.elements.messageInput.oninput = () => {
+                this.elements.sendBtn.disabled = !this.elements.messageInput.value.trim();
+                this.handleTyping();
+            };
+            this.elements.messageInput.onkeydown = (e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    this.sendMessage();
+                }
+            };
+        }
+        if (this.elements.sendBtn) this.elements.sendBtn.onclick = () => this.sendMessage();
+        if (this.elements.unsendMessageBtn) this.elements.unsendMessageBtn.onclick = () => this.unsendLastMessage();
 
-        this.socket.on("message-unsent", (data) => {
-            const msg = document.querySelector(`[data-message-id="${data.messageId}"]`);
-            if (msg) {
-                msg.querySelector(".message-text").innerHTML =
-                    "<em style='color:#999;'>This message was unsent</em>";
-            }
-            this.updateChatListUI();
-        });
-
-        this.socket.on("message-edited", (data) => {
-            const msg = document.querySelector(`[data-message-id="${data.messageId}"]`);
-            if (msg) {
-                msg.querySelector(".message-text").innerHTML =
-                    `${data.newText} <span class="edited-tag">(edited)</span>`;
-            }
-        });
-
-        this.socket.on("message-reacted", (data) => {
-            this.updateReactionsUI(data.messageId, data.reactions);
-        });
-
-        this.socket.on("chat-cleared", (data) => {
-            if (!this.currentGroup && this.currentRecipient === data.chatUser) {
-                document.getElementById("messagesContainer").innerHTML =
-                    "<div class='no-messages'>No messages yet. Start a conversation!</div>";
-            }
-            this.tempClearedMessages = data;
-            this.showUndoNotification();
-            this.updateChatListUI();
-        });
-
-        this.socket.on("chat-restored", (data) => {
-            if (!this.currentGroup && this.currentRecipient === data.chatUser) {
-                this.loadChatMessages();
-            }
-            this.tempClearedMessages = null;
+        // Undo
+        if (this.elements.undoBtn) this.elements.undoBtn.onclick = () => {
             this.hideUndoNotification();
-            this.updateChatListUI();
+            this.undoClearChat();
+        };
+
+        // Logout
+        if (this.elements.logoutBtn) this.elements.logoutBtn.onclick = () => this.logout();
+    }
+
+    bindSocket() {
+        // Connection established
+        this.socket.on("connect", () => {
+            // nothing to do until user logs in
         });
 
-        this.socket.on("user-typing", (data) => {
-            if (!this.currentGroup && this.currentRecipient === data.username) {
-                this.showTypingIndicator(data.username, data.isTyping);
+        // Incoming direct message
+        this.socket.on("message", (msg) => {
+            // If current chat matches, display; otherwise update chat list preview
+            if (this.currentRecipient && msg.from === this.currentRecipient && !this.currentGroup) {
+                this.displayMessage(msg);
             }
-        });
-
-        this.socket.on("user-status-change", () => {
             this.updateChatListUI();
         });
 
-        /* ----- GROUP EVENTS ----- */
+        // Incoming group message
+        this.socket.on("group-message", (msg) => {
+            if (this.currentGroup && msg.groupId === this.currentGroup) {
+                this.displayGroupMessage(msg);
+            }
+            this.loadUserGroups(); // refresh previews
+        });
+
+        // Message status updates (sent/delivered/read)
+        this.socket.on("message-status", ({ messageId, status }) => {
+            this.updateMessageStatus(messageId, status);
+        });
+
+        // Reactions for direct messages
+        this.socket.on("message-reactions", ({ messageId, reactions }) => {
+            this.updateReactionsUI(messageId, reactions);
+        });
+
+        // Reactions for group messages
+        this.socket.on("group-message-reactions", ({ messageId, reactions }) => {
+            this.updateReactionsUI(messageId, reactions);
+        });
+
+        // Chat cleared (server confirms)
+        this.socket.on("chat-cleared", ({ username, chatUser, clearedMessages }) => {
+            if (!this.currentUser) return;
+            if (this.currentUser.username === username && this.currentRecipient === chatUser && !this.currentGroup) {
+                this.tempClearedMessages = { clearedMessages };
+                this.elements.messagesContainer.innerHTML = "<div class='no-messages'>Chat cleared</div>";
+                this.showUndoNotification();
+                this.startUndoCountdown();
+            }
+            this.updateChatListUI();
+        });
+
+        // Chat restored
+        this.socket.on("chat-restored", ({ username, chatUser, restoredMessages }) => {
+            if (!this.currentUser) return;
+            if (this.currentUser.username === username && this.currentRecipient === chatUser && !this.currentGroup) {
+                this.tempClearedMessages = null;
+                this.loadChatMessages();
+                this.hideUndoNotification();
+            }
+            this.updateChatListUI();
+        });
+
+        // User presence
+        this.socket.on("user-online", (username) => this.updatePresence(username, true));
+        this.socket.on("user-offline", (username) => this.updatePresence(username, false));
+
+        // Typing indicators
+        this.socket.on("typing", ({ from, to }) => {
+            if (this.currentRecipient === from && to === this.currentUser?.username) this.showTypingIndicator(from, true);
+            setTimeout(() => this.showTypingIndicator("", false), 2500);
+        });
+        this.socket.on("group-typing", ({ from, groupId }) => {
+            if (this.currentGroup === groupId) this.showTypingIndicator(from, true);
+            setTimeout(() => this.showTypingIndicator("", false), 2500);
+        });
+
+        // Group created
         this.socket.on("group-created", (group) => {
             this.groups.push(group);
             this.updateGroupListUI();
+            this.showStatus(`Group "${group.name}" created`, "success");
         });
 
-        this.socket.on("new-group-message", (message) => {
-            if (this.currentGroup === message.groupId) {
-                this.displayGroupMessage(message);
-            }
-            this.updateGroupListUI();
-        });
-
-        this.socket.on("group-message-edited", (data) => {
-            const msg = document.querySelector(`[data-message-id="${data.messageId}"]`);
-            if (msg) {
-                msg.querySelector(".message-text").innerHTML =
-                    `${data.newText} <span class="edited-tag">(edited)</span>`;
-            }
-        });
-
-        this.socket.on("group-message-unsent", (data) => {
-            const msg = document.querySelector(`[data-message-id="${data.messageId}"]`);
-            if (msg) {
-                msg.querySelector(".message-text").innerHTML =
-                    "<em style='color:#999;'>This message was unsent</em>";
-            }
-        });
-
-        this.socket.on("group-message-reacted", (data) => {
-            this.updateReactionsUI(data.messageId, data.reactions);
-        });
-
-        this.socket.on("group-typing", (data) => {
-            if (this.currentGroup === data.groupId) {
-                this.showTypingIndicator(data.username, data.isTyping);
-            }
-        });
-    }
-
-    /* ============================
-       AUTH UI
-       ============================ */
-    initAuthUI() {
-        const loginForm = document.getElementById("loginForm");
-        const signupForm = document.getElementById("signupForm");
-        const emailLoginForm = document.getElementById("emailLoginForm");
-
-        const showSignup = document.getElementById("showSignup");
-        const showEmailLogin = document.getElementById("showEmailLogin");
-        const showLogin = document.getElementById("showLogin");
-        const showLoginFromEmail = document.getElementById("showLoginFromEmail");
-        const showSignupFromEmail = document.getElementById("showSignupFromEmail");
-
-        const generatedIdSpan = document.getElementById("generatedId");
-
-        const switchToLogin = () => {
-            loginForm.classList.remove("hidden");
-            signupForm.classList.add("hidden");
-            emailLoginForm.classList.add("hidden");
-        };
-
-        const switchToSignup = () => {
-            loginForm.classList.add("hidden");
-            signupForm.classList.remove("hidden");
-            emailLoginForm.classList.add("hidden");
-            generatedIdSpan.textContent =
-                "USR-" + Math.random().toString(36).substr(2, 5).toUpperCase();
-        };
-
-        const switchToEmailLogin = () => {
-            loginForm.classList.add("hidden");
-            signupForm.classList.add("hidden");
-            emailLoginForm.classList.remove("hidden");
-        };
-
-        showSignup.onclick = (e) => { e.preventDefault(); switchToSignup(); };
-        showEmailLogin.onclick = (e) => { e.preventDefault(); switchToEmailLogin(); };
-        showLogin.onclick = (e) => { e.preventDefault(); switchToLogin(); };
-        showLoginFromEmail.onclick = (e) => { e.preventDefault(); switchToLogin(); };
-        showSignupFromEmail.onclick = (e) => { e.preventDefault(); switchToSignup(); };
-    }
-
-    /* ============================
-       EVENT LISTENERS
-       ============================ */
-    setupEventListeners() {
-        const signupForm = document.getElementById("signupFormElement");
-        const quickLoginForm = document.getElementById("quickLoginForm");
-        const emailLoginForm = document.getElementById("emailLoginFormElement");
-
-        signupForm?.addEventListener("submit", (e) => {
-            e.preventDefault();
-            this.handleRegistration();
-        });
-
-        quickLoginForm?.addEventListener("submit", (e) => {
-            e.preventDefault();
-            this.handleQuickLogin();
-        });
-
-        emailLoginForm?.addEventListener("submit", (e) => {
-            e.preventDefault();
-            this.handleEmailLogin();
-        });
-
-        document.getElementById("sendBtn").onclick = () => this.sendMessage();
-        document.getElementById("unsendMessageBtn").onclick = () => this.unsendLastMessage();
-        document.getElementById("searchBtn").onclick = () => this.searchUsers();
-        document.getElementById("logoutBtn").onclick = () => this.logout();
-        document.getElementById("clearChatBtn").onclick = () => this.clearChat();
-        document.getElementById("undoBtn").onclick = () => this.undoClearChat();
-
-        const messageInput = document.getElementById("messageInput");
-        messageInput.addEventListener("keypress", (e) => {
-            if (e.key === "Enter") {
-                e.preventDefault();
-                this.sendMessage();
-            } else {
-                this.handleTyping();
-            }
-        });
-
-        // Dark mode toggle (button should exist in your HTML)
-        const darkToggle = document.getElementById("darkModeToggle");
-        if (darkToggle) {
-            darkToggle.onclick = () => this.toggleDarkMode();
-        }
-
-        // Basic message search in current chat (if you add UI)
-        const msgSearchInput = document.getElementById("messageSearchInput");
-        const msgSearchBtn = document.getElementById("messageSearchBtn");
-        if (msgSearchBtn && msgSearchInput) {
-            msgSearchBtn.onclick = () => this.searchMessages(msgSearchInput.value.trim());
-        }
-
-        // Group creation UI (optional, if you add inputs/buttons)
-        const createGroupBtn = document.getElementById("createGroupBtn");
-        if (createGroupBtn) {
-            createGroupBtn.onclick = () => this.createGroupFromPrompt();
-        }
+        // Generic error
+        this.socket.on("error-message", (msg) => this.showStatus(msg, "error"));
     }
 
     /* ============================
        AUTH HANDLERS
        ============================ */
     async handleRegistration() {
-        const username = document.getElementById("signupUsername").value.trim();
-        const email = document.getElementById("signupEmail").value.trim();
-        const password = document.getElementById("signupPassword").value;
+        const username = (this.$("signupUsername") || {}).value?.trim();
+        const email = (this.$("signupEmail") || {}).value?.trim();
+        const password = (this.$("signupPassword") || {}).value;
 
         if (!username || !email || !password) {
             return this.showStatus("Please fill in all fields", "error");
         }
 
-        const res = await fetch("/api/register", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username, email, password })
-        });
+        try {
+            const res = await fetch("/api/register", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, email, password })
+            });
+            const data = await res.json();
+            if (!data.success) return this.showStatus(data.error || "Registration failed", "error");
 
-        const data = await res.json();
-        if (!data.success) return this.showStatus(data.error, "error");
-
-        this.currentUser = data.user;
-        this.darkMode = !!data.user.prefersDarkMode;
-        this.profileImageUrl = data.user.profileImageUrl || null;
-
-        if (this.darkMode) document.body.classList.add("dark-mode");
-
-        this.socket.emit("user-online", this.currentUser.username);
-        this.showChatInterface();
-        this.showStatus(data.message, "success");
+            this.currentUser = data.user;
+            this.applyUserPreferences();
+            this.socket.emit("user-online", this.currentUser.username);
+            this.showChatInterface();
+            this.showStatus(data.message || "Registered", "success");
+        } catch (err) {
+            this.showStatus("Registration error", "error");
+            console.error(err);
+        }
     }
 
     async handleQuickLogin() {
-        const userId = document.getElementById("quickLoginUserId").value.trim();
+        const userId = (this.$("quickLoginUserId") || {}).value?.trim();
         if (!userId) return this.showStatus("Enter Student ID", "error");
 
-        const res = await fetch("/api/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId })
-        });
+        try {
+            const res = await fetch("/api/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ userId })
+            });
+            const data = await res.json();
+            if (!data.success) return this.showStatus(data.error || "Login failed", "error");
 
-        const data = await res.json();
-        if (!data.success) return this.showStatus(data.error, "error");
-
-        this.currentUser = data.user;
-        this.darkMode = !!data.user.prefersDarkMode;
-        this.profileImageUrl = data.user.profileImageUrl || null;
-
-        if (this.darkMode) document.body.classList.add("dark-mode");
-        else document.body.classList.remove("dark-mode");
-
-        this.socket.emit("user-online", this.currentUser.username);
-        this.showChatInterface();
-        this.showStatus(data.message, "success");
+            this.currentUser = data.user;
+            this.applyUserPreferences();
+            this.socket.emit("user-online", this.currentUser.username);
+            this.showChatInterface();
+            this.showStatus(data.message || "Logged in", "success");
+        } catch (err) {
+            this.showStatus("Login error", "error");
+            console.error(err);
+        }
     }
 
     async handleEmailLogin() {
-        const email = document.getElementById("emailLoginEmail").value.trim();
-        const password = document.getElementById("emailLoginPassword").value;
-
+        const email = (this.$("emailLoginEmail") || {}).value?.trim();
+        const password = (this.$("emailLoginPassword") || {}).value;
         if (!email || !password) return this.showStatus("Fill all fields", "error");
 
-        const res = await fetch("/api/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password })
-        });
+        try {
+            const res = await fetch("/api/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, password })
+            });
+            const data = await res.json();
+            if (!data.success) return this.showStatus(data.error || "Login failed", "error");
 
-        const data = await res.json();
-        if (!data.success) return this.showStatus(data.error, "error");
+            this.currentUser = data.user;
+            this.applyUserPreferences();
+            this.socket.emit("user-online", this.currentUser.username);
+            this.showChatInterface();
+            this.showStatus(data.message || "Logged in", "success");
+        } catch (err) {
+            this.showStatus("Login error", "error");
+            console.error(err);
+        }
+    }
 
-        this.currentUser = data.user;
-        this.darkMode = !!data.user.prefersDarkMode;
-        this.profileImageUrl = data.user.profileImageUrl || null;
-
+    applyUserPreferences() {
+        this.darkMode = !!this.currentUser?.prefersDarkMode;
         if (this.darkMode) document.body.classList.add("dark-mode");
         else document.body.classList.remove("dark-mode");
-
-        this.socket.emit("user-online", this.currentUser.username);
-        this.showChatInterface();
-        this.showStatus(data.message, "success");
+        this.profileImageUrl = this.currentUser?.profileImageUrl || null;
     }
 
     /* ============================
@@ -341,20 +317,18 @@ class ChatClient {
        ============================ */
     async startChat(username) {
         this.currentRecipient = username;
-        this.currentGroup = null; // leave group mode
-
-        document.getElementById("chatUsername").textContent = `Chat with ${username}`;
-        document.getElementById("chatHeader").style.display = "flex";
-        document.getElementById("chatInput").style.display = "block";
-        document.getElementById("messageInput").disabled = false;
-        document.getElementById("sendBtn").disabled = false;
-
+        this.currentGroup = null;
+        this.elements.chatUsername.textContent = `Chat with ${username}`;
+        this.elements.chatHeader.style.display = "flex";
+        this.elements.chatInput.style.display = "block";
+        this.elements.messageInput.disabled = false;
+        this.elements.sendBtn.disabled = false;
         await this.loadChatMessages();
         await this.updateChatListUI();
     }
 
     async loadChatMessages() {
-        const container = document.getElementById("messagesContainer");
+        const container = this.elements.messagesContainer;
         container.innerHTML = "";
 
         if (!this.currentUser || !this.currentRecipient) {
@@ -363,16 +337,19 @@ class ChatClient {
         }
 
         const chatId = this.getChatId(this.currentUser.username, this.currentRecipient);
-        const res = await fetch(`/api/messages/${chatId}`);
-        const messages = await res.json();
-
-        if (!messages.length) {
-            container.innerHTML = "<div class='no-messages'>No messages yet.</div>";
-            return;
+        try {
+            const res = await fetch(`/api/messages/${encodeURIComponent(chatId)}`);
+            const messages = await res.json();
+            if (!messages || !messages.length) {
+                container.innerHTML = "<div class='no-messages'>No messages yet.</div>";
+                return;
+            }
+            messages.forEach((msg) => this.displayMessage(msg));
+            container.scrollTop = container.scrollHeight;
+        } catch (err) {
+            console.error(err);
+            container.innerHTML = "<div class='no-messages'>Unable to load messages.</div>";
         }
-
-        messages.forEach((msg) => this.displayMessage(msg));
-        container.scrollTop = container.scrollHeight;
     }
 
     /* ============================
@@ -385,38 +362,50 @@ class ChatClient {
         const group = this.groups.find(g => g.id === groupId);
         const name = group ? group.name : "Group";
 
-        document.getElementById("chatUsername").textContent = name;
-        document.getElementById("chatHeader").style.display = "flex";
-        document.getElementById("chatInput").style.display = "block";
-        document.getElementById("messageInput").disabled = false;
-        document.getElementById("sendBtn").disabled = false;
+        this.elements.chatUsername.textContent = name;
+        this.elements.chatHeader.style.display = "flex";
+        this.elements.chatInput.style.display = "block";
+        this.elements.messageInput.disabled = false;
+        this.elements.sendBtn.disabled = false;
 
-        const container = document.getElementById("messagesContainer");
+        const container = this.elements.messagesContainer;
         container.innerHTML = "";
 
-        const res = await fetch(`/api/group-messages/${groupId}`);
-        const msgs = await res.json();
-        if (!msgs.length) {
-            container.innerHTML = "<div class='no-messages'>No messages yet in this group.</div>";
-            return;
+        try {
+            const res = await fetch(`/api/group-messages/${encodeURIComponent(groupId)}`);
+            const msgs = await res.json();
+            if (!msgs || !msgs.length) {
+                container.innerHTML = "<div class='no-messages'>No messages yet in this group.</div>";
+                return;
+            }
+            msgs.forEach(m => this.displayGroupMessage(m));
+            container.scrollTop = container.scrollHeight;
+        } catch (err) {
+            console.error(err);
+            container.innerHTML = "<div class='no-messages'>Unable to load group messages.</div>";
         }
-        msgs.forEach(m => this.displayGroupMessage(m));
-        container.scrollTop = container.scrollHeight;
     }
 
     async loadUserGroups() {
         if (!this.currentUser) return;
-        const res = await fetch(`/api/groups/${this.currentUser.username}`);
-        this.groups = await res.json();
-        this.updateGroupListUI();
+        try {
+            const res = await fetch(`/api/groups/${encodeURIComponent(this.currentUser.username)}`);
+            const groups = await res.json();
+            this.groups = Array.isArray(groups) ? groups : [];
+            this.updateGroupListUI();
+        } catch (err) {
+            console.error(err);
+        }
     }
 
     /* ============================
        MESSAGE RENDERING (DIRECT)
        ============================ */
     displayMessage(message) {
-        const container = document.getElementById("messagesContainer");
+        const container = this.elements.messagesContainer;
+        if (!container) return;
 
+        // Build message element
         const div = document.createElement("div");
         div.className = "message " + (message.from === this.currentUser.username ? "own" : "received");
         div.dataset.messageId = message.id;
@@ -428,32 +417,33 @@ class ChatClient {
             <div class="message-content">
                 <div class="message-bubble">
                     <div class="message-text">
-                        ${message.text}
+                        ${this.escapeHtml(message.text || "")}
                         ${message.isEdited ? "<span class='edited-tag'>(edited)</span>" : ""}
                     </div>
                     <div class="message-meta">
-                        <span class="message-time">${new Date(message.timestamp).toLocaleTimeString()}</span>
+                        <span class="message-time">${new Date(message.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                         <span class="message-status"></span>
                     </div>
                 </div>
                 <div class="reaction-row"></div>
-                <button class="reaction-btn">😊</button>
+                <button class="reaction-btn" title="React">😊</button>
             </div>
         `;
 
-        // Reaction button click
-        div.querySelector(".reaction-btn").onclick = (e) => {
+        // Reaction button
+        const reactionBtn = div.querySelector(".reaction-btn");
+        reactionBtn.onclick = (e) => {
             e.stopPropagation();
             this.openReactionBar(message.id, div, false);
         };
 
-        // Right-click for reactions
+        // Context menu (right click)
         div.oncontextmenu = (e) => {
             e.preventDefault();
             this.openReactionBar(message.id, div, false);
         };
 
-        // Double-click to edit your own message
+        // Double-click to edit own message
         if (message.from === this.currentUser.username && !message.isUnsent) {
             div.ondblclick = () => this.editMessagePrompt(message, false);
         }
@@ -461,21 +451,16 @@ class ChatClient {
         container.appendChild(div);
         container.scrollTop = container.scrollHeight;
 
-        if (message.reactions) {
-            this.updateReactionsUI(message.id, message.reactions);
-        }
-
-        // If this message has a status (for read receipts)
-        if (message.status) {
-            this.updateMessageStatus(message.id, message.status);
-        }
+        if (message.reactions) this.updateReactionsUI(message.id, message.reactions);
+        if (message.status) this.updateMessageStatus(message.id, message.status);
     }
 
     /* ============================
        MESSAGE RENDERING (GROUP)
        ============================ */
     displayGroupMessage(message) {
-        const container = document.getElementById("messagesContainer");
+        const container = this.elements.messagesContainer;
+        if (!container) return;
 
         const isOwn = message.from === this.currentUser.username;
         const div = document.createElement("div");
@@ -489,29 +474,28 @@ class ChatClient {
             <div class="message-content">
                 <div class="message-bubble">
                     <div class="message-text">
-                        <strong>${message.from}:</strong> ${message.text}
+                        <strong>${this.escapeHtml(message.from)}:</strong> ${this.escapeHtml(message.text || "")}
                         ${message.isEdited ? "<span class='edited-tag'>(edited)</span>" : ""}
                     </div>
                     <div class="message-meta">
-                        <span class="message-time">${new Date(message.timestamp).toLocaleTimeString()}</span>
+                        <span class="message-time">${new Date(message.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                         <span class="message-status"></span>
                     </div>
                 </div>
                 <div class="reaction-row"></div>
-                <button class="reaction-btn">😊</button>
+                <button class="reaction-btn" title="React">😊</button>
             </div>
         `;
 
-        div.querySelector(".reaction-btn").onclick = (e) => {
+        const reactionBtn = div.querySelector(".reaction-btn");
+        reactionBtn.onclick = (e) => {
             e.stopPropagation();
             this.openReactionBar(message.id, div, true);
         };
-
         div.oncontextmenu = (e) => {
             e.preventDefault();
             this.openReactionBar(message.id, div, true);
         };
-
         if (isOwn && !message.isUnsent) {
             div.ondblclick = () => this.editMessagePrompt(message, true);
         }
@@ -519,15 +503,14 @@ class ChatClient {
         container.appendChild(div);
         container.scrollTop = container.scrollHeight;
 
-        if (message.reactions) {
-            this.updateReactionsUI(message.id, message.reactions);
-        }
+        if (message.reactions) this.updateReactionsUI(message.id, message.reactions);
     }
 
     /* ============================
        REACTIONS
        ============================ */
     openReactionBar(messageId, messageElement, isGroup) {
+        // Remove existing
         const existing = messageElement.querySelector(".reaction-bar");
         if (existing) existing.remove();
 
@@ -538,7 +521,8 @@ class ChatClient {
             const btn = document.createElement("button");
             btn.className = "reaction-option";
             btn.textContent = emoji;
-            btn.onclick = () => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
                 if (isGroup && this.currentGroup) {
                     this.socket.emit("react-group-message", {
                         messageId,
@@ -561,22 +545,25 @@ class ChatClient {
 
         messageElement.appendChild(bar);
 
+        // Close on outside click
         setTimeout(() => {
-            document.addEventListener("click", () => {
-                bar.remove();
-            }, { once: true });
+            const onDocClick = (ev) => {
+                if (!bar.contains(ev.target)) bar.remove();
+                document.removeEventListener("click", onDocClick);
+            };
+            document.addEventListener("click", onDocClick);
         }, 50);
     }
 
     updateReactionsUI(messageId, reactions) {
         const msg = document.querySelector(`[data-message-id="${messageId}"]`);
         if (!msg) return;
-
         const row = msg.querySelector(".reaction-row");
+        if (!row) return;
         row.innerHTML = "";
 
         const grouped = {};
-        reactions.forEach((r) => {
+        (reactions || []).forEach((r) => {
             grouped[r.reaction] = (grouped[r.reaction] || 0) + 1;
         });
 
@@ -593,21 +580,23 @@ class ChatClient {
        ============================ */
     editMessagePrompt(message, isGroup) {
         const newText = prompt("Edit your message:", message.text);
-        if (newText == null || newText.trim() === "" || newText.trim() === message.text) return;
+        if (newText == null) return;
+        const trimmed = newText.trim();
+        if (trimmed === "" || trimmed === message.text) return;
 
         if (isGroup && this.currentGroup) {
             this.socket.emit("edit-group-message", {
                 messageId: message.id,
                 from: this.currentUser.username,
                 groupId: this.currentGroup,
-                newText
+                newText: trimmed
             });
         } else if (this.currentRecipient) {
             this.socket.emit("edit-message", {
                 messageId: message.id,
                 from: this.currentUser.username,
                 to: this.currentRecipient,
-                newText
+                newText: trimmed
             });
         }
     }
@@ -616,27 +605,28 @@ class ChatClient {
        SEND / UNSEND
        ============================ */
     sendMessage() {
-        const input = document.getElementById("messageInput");
+        const input = this.elements.messageInput;
+        if (!input) return;
         const text = input.value.trim();
         if (!text) return;
 
         const id = "msg_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
 
         if (this.currentGroup) {
-            // group message
             this.socket.emit("send-group-message", {
                 from: this.currentUser.username,
                 groupId: this.currentGroup,
                 text,
-                messageId: id
+                messageId: id,
+                timestamp: Date.now()
             });
         } else if (this.currentRecipient) {
-            // direct message
             this.socket.emit("send-message", {
                 from: this.currentUser.username,
                 to: this.currentRecipient,
                 text,
-                messageId: id
+                messageId: id,
+                timestamp: Date.now()
             });
         } else {
             return;
@@ -644,6 +634,7 @@ class ChatClient {
 
         this.lastSentMessageId = id;
         input.value = "";
+        this.elements.sendBtn.disabled = true;
         this.stopTyping();
     }
 
@@ -684,7 +675,7 @@ class ChatClient {
             statusSpan.style.color = "#999";
         } else if (status === "read") {
             statusSpan.textContent = "✓✓";
-            statusSpan.style.color = "#34b7f1"; // blue like WhatsApp
+            statusSpan.style.color = "var(--wa-status-blue)";
         } else {
             statusSpan.textContent = "";
         }
@@ -694,6 +685,7 @@ class ChatClient {
        TYPING INDICATOR
        ============================ */
     handleTyping() {
+        if (!this.currentUser) return;
         if (this.currentGroup) {
             this.socket.emit("group-typing-start", {
                 from: this.currentUser.username,
@@ -711,6 +703,7 @@ class ChatClient {
     }
 
     stopTyping() {
+        if (!this.currentUser) return;
         if (this.currentGroup) {
             this.socket.emit("group-typing-stop", {
                 from: this.currentUser.username,
@@ -725,7 +718,8 @@ class ChatClient {
     }
 
     showTypingIndicator(username, isTyping) {
-        const el = document.getElementById("typingIndicator");
+        const el = this.elements.typingIndicator;
+        if (!el) return;
         el.style.display = isTyping ? "block" : "none";
         el.textContent = isTyping ? `${username} is typing...` : "";
     }
@@ -735,59 +729,60 @@ class ChatClient {
        ============================ */
     async updateChatListUI() {
         if (!this.currentUser) return;
-        const res = await fetch(`/api/chats/${this.currentUser.username}`);
-        const chats = await res.json();
+        try {
+            const res = await fetch(`/api/chats/${encodeURIComponent(this.currentUser.username)}`);
+            const chats = await res.json();
+            const list = this.elements.userList;
+            list.innerHTML = "";
 
-        const list = document.getElementById("userList");
-        list.innerHTML = "";
+            if (!chats || !chats.length) {
+                const li = document.createElement("li");
+                li.style.padding = "1rem";
+                li.style.textAlign = "center";
+                li.style.color = "#8696a0";
+                li.style.fontStyle = "italic";
+                li.textContent = "No chats yet.";
+                list.appendChild(li);
+                return;
+            }
 
-        if (!chats.length) {
-            const li = document.createElement("li");
-            li.style.padding = "1rem";
-            li.style.textAlign = "center";
-            li.style.color = "#666";
-            li.style.fontStyle = "italic";
-            li.textContent = "No chats yet.";
-            list.appendChild(li);
-            return;
+            chats.forEach((ch) => {
+                const li = document.createElement("li");
+                li.className = "user-item";
+                li.onclick = () => this.startChat(ch.username);
+
+                const initial = ch.username ? ch.username[0].toUpperCase() : "?";
+
+                li.innerHTML = `
+                    <div class="chat-item-header">
+                        <div class="chat-item-avatar">
+                            ${initial}
+                            <span class="${ch.isOnline ? "online-indicator" : "offline-indicator"}"></span>
+                        </div>
+                        <div class="chat-item-info">
+                            <div class="chat-item-name">${this.escapeHtml(ch.username)}</div>
+                            <div class="chat-item-preview">${this.escapeHtml(ch.lastMessage || "")}</div>
+                        </div>
+                    </div>
+                `;
+                list.appendChild(li);
+            });
+        } catch (err) {
+            console.error(err);
         }
-
-        chats.forEach((ch) => {
-            const li = document.createElement("li");
-            li.className = "user-item";
-            li.onclick = () => this.startChat(ch.username);
-
-            const initial = ch.username ? ch.username[0].toUpperCase() : "?";
-
-            li.innerHTML = `
-                <div class="chat-item-header">
-                    <div class="chat-item-avatar">
-                        ${initial}
-                        <span class="${ch.isOnline ? "online-indicator" : "offline-indicator"}"></span>
-                    </div>
-                    <div class="chat-item-info">
-                        <div class="chat-item-name">${ch.username}</div>
-                        <div class="chat-item-preview">${ch.lastMessage || ""}</div>
-                    </div>
-                </div>
-            `;
-
-            list.appendChild(li);
-        });
     }
 
     /* ============================
        GROUP LIST
        ============================ */
     updateGroupListUI() {
-        const container = document.getElementById("groupList");
+        const container = this.elements.groupList;
         if (!container) return;
-
         container.innerHTML = "";
 
         if (!this.groups || !this.groups.length) {
             container.innerHTML = `
-                <li style="padding:0.5rem 1rem; color:#666; font-style:italic;">
+                <li style="padding:0.8rem 0.9rem; color:#8696a0; font-style:italic;">
                     No groups yet.
                 </li>`;
             return;
@@ -806,12 +801,11 @@ class ChatClient {
                         ${initial}
                     </div>
                     <div class="chat-item-info">
-                        <div class="chat-item-name">${g.name}</div>
-                        <div class="chat-item-preview">${g.members.length} members</div>
+                        <div class="chat-item-name">${this.escapeHtml(g.name)}</div>
+                        <div class="chat-item-preview">${g.members?.length || 0} members</div>
                     </div>
                 </div>
             `;
-
             container.appendChild(li);
         });
     }
@@ -820,6 +814,7 @@ class ChatClient {
        CREATE GROUP (BASIC PROMPT)
        ============================ */
     async createGroupFromPrompt() {
+        if (!this.currentUser) return;
         const name = prompt("Group name:");
         if (!name) return;
 
@@ -844,36 +839,40 @@ class ChatClient {
        SEARCH USERS (EXISTING)
        ============================ */
     async searchUsers() {
-        const query = document.getElementById("searchInput").value.trim();
-        const resultsContainer = document.getElementById("searchResults");
+        const query = (this.elements.searchInput || {}).value?.trim();
+        const resultsContainer = this.elements.searchResults;
+        if (!resultsContainer) return;
 
         if (!query) {
             resultsContainer.innerHTML = "";
             return;
         }
 
-        const res = await fetch(
-            `/api/users/search?query=${encodeURIComponent(query)}&currentUser=${encodeURIComponent(this.currentUser.username)}`
-        );
-        const users = await res.json();
+        try {
+            const res = await fetch(
+                `/api/users/search?query=${encodeURIComponent(query)}&currentUser=${encodeURIComponent(this.currentUser?.username || "")}`
+            );
+            const users = await res.json();
+            resultsContainer.innerHTML = "";
 
-        resultsContainer.innerHTML = "";
+            if (!users || !users.length) {
+                resultsContainer.innerHTML = "<div class='search-empty' style='padding:0.6rem;color:#8696a0;'>No users found.</div>";
+                return;
+            }
 
-        if (!users.length) {
-            resultsContainer.innerHTML = "<div class='search-empty'>No users found.</div>";
-            return;
+            users.forEach((u) => {
+                const div = document.createElement("div");
+                div.className = "search-result-item";
+                div.innerHTML = `<div>${this.escapeHtml(u.username)} <span style="color:#999;font-size:0.8rem">(${this.escapeHtml(u.userId || "")})</span></div>`;
+                div.onclick = () => {
+                    resultsContainer.innerHTML = "";
+                    this.startChat(u.username);
+                };
+                resultsContainer.appendChild(div);
+            });
+        } catch (err) {
+            console.error(err);
         }
-
-        users.forEach((u) => {
-            const div = document.createElement("div");
-            div.className = "search-result-item";
-            div.textContent = `${u.username} (${u.userId || ""})`;
-            div.onclick = () => {
-                resultsContainer.innerHTML = "";
-                this.startChat(u.username);
-            };
-            resultsContainer.appendChild(div);
-        });
     }
 
     /* ============================
@@ -881,8 +880,7 @@ class ChatClient {
        ============================ */
     searchMessages(query) {
         if (!query) return;
-
-        const container = document.getElementById("messagesContainer");
+        const container = this.elements.messagesContainer;
         const allMessages = Array.from(container.querySelectorAll(".message"));
 
         // Clear previous highlights
@@ -910,7 +908,7 @@ class ChatClient {
 
         matches.forEach(({ textElement }) => {
             const raw = textElement.innerText || textElement.textContent || "";
-            const regex = new RegExp(`(${query})`, "ig");
+            const regex = new RegExp(`(${this.escapeRegExp(query)})`, "ig");
             const highlighted = raw.replace(regex, "<mark>$1</mark>");
             textElement.innerHTML = highlighted;
         });
@@ -947,11 +945,28 @@ class ChatClient {
     }
 
     showUndoNotification() {
-        document.getElementById("undoNotification").style.display = "block";
+        if (!this.elements.undoNotification) return;
+        this.elements.undoNotification.style.display = "block";
     }
 
     hideUndoNotification() {
-        document.getElementById("undoNotification").style.display = "none";
+        if (!this.elements.undoNotification) return;
+        this.elements.undoNotification.style.display = "none";
+    }
+
+    startUndoCountdown() {
+        let count = 5;
+        if (!this.elements.undoCountdown) return;
+        this.elements.undoCountdown.textContent = count;
+        const interval = setInterval(() => {
+            count -= 1;
+            this.elements.undoCountdown.textContent = count;
+            if (count <= 0) {
+                clearInterval(interval);
+                this.hideUndoNotification();
+                this.tempClearedMessages = null;
+            }
+        }, 1000);
     }
 
     /* ============================
@@ -960,9 +975,7 @@ class ChatClient {
     enableDarkMode() {
         document.body.classList.add("dark-mode");
         this.darkMode = true;
-
         if (!this.currentUser) return;
-
         fetch("/api/user/preferences", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -970,23 +983,21 @@ class ChatClient {
                 username: this.currentUser.username,
                 prefersDarkMode: true
             })
-        });
+        }).catch(() => {});
     }
 
     disableDarkMode() {
         document.body.classList.remove("dark-mode");
         this.darkMode = false;
-
         if (!this.currentUser) return;
-
-        fetch("/api.user/preferences", {  // NOTE: if this is a typo, fix to /api/user/preferences
+        fetch("/api/user/preferences", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 username: this.currentUser.username,
                 prefersDarkMode: false
             })
-        });
+        }).catch(() => {});
     }
 
     toggleDarkMode() {
@@ -998,14 +1009,15 @@ class ChatClient {
        UI HELPERS
        ============================ */
     showChatInterface() {
-        document.getElementById("authScreen").style.display = "none";
-        document.getElementById("mainApp").style.display = "flex";
+        if (this.elements.authScreen) this.elements.authScreen.style.display = "none";
+        if (this.elements.mainApp) this.elements.mainApp.style.display = "block";
 
-        document.getElementById("currentUsername").textContent = this.currentUser.username;
-        document.getElementById("currentUserId").textContent = this.currentUser.userId;
+        if (this.elements.currentUsername) this.elements.currentUsername.textContent = this.currentUser.username;
+        if (this.elements.currentUserId) this.elements.currentUserId.textContent = this.currentUser.userId || "";
 
-        const avatar = document.getElementById("currentUserAvatar");
-        avatar.textContent = this.currentUser.username[0].toUpperCase();
+        if (this.elements.currentUserAvatar) {
+            this.elements.currentUserAvatar.textContent = (this.currentUser.username || "U")[0].toUpperCase();
+        }
 
         setTimeout(() => this.updateChatListUI(), 300);
         this.loadUserGroups();
@@ -1016,42 +1028,38 @@ class ChatClient {
         this.currentRecipient = null;
         this.currentGroup = null;
 
-        document.getElementById("authScreen").style.display = "flex";
-        document.getElementById("mainApp").style.display = "none";
+        if (this.elements.authScreen) this.elements.authScreen.style.display = "flex";
+        if (this.elements.mainApp) this.elements.mainApp.style.display = "none";
 
-        document.getElementById("quickLoginUserId").value = "";
-        document.getElementById("signupEmail").value = "";
-        document.getElementById("signupUsername").value = "";
-        document.getElementById("signupPassword").value = "";
-        document.getElementById("emailLoginEmail").value = "";
-        document.getElementById("emailLoginPassword").value = "";
+        // Clear inputs
+        ["quickLoginUserId","signupEmail","signupUsername","signupPassword","emailLoginEmail","emailLoginPassword"].forEach(id => {
+            const el = this.$(id);
+            if (el) el.value = "";
+        });
 
-        document.getElementById("messagesContainer").innerHTML =
+        if (this.elements.messagesContainer) this.elements.messagesContainer.innerHTML =
             "<div class='no-messages'>Select a user to start chatting</div>";
-        document.getElementById("userList").innerHTML = `
-            <li style="padding:1rem;text-align:center;color:#666;font-style:italic;">
+        if (this.elements.userList) this.elements.userList.innerHTML = `
+            <li style="padding:1rem;text-align:center;color:#8696a0;font-style:italic;">
                 No chats yet.
             </li>`;
 
-        const groupList = document.getElementById("groupList");
-        if (groupList) groupList.innerHTML = "";
-
+        if (this.elements.groupList) this.elements.groupList.innerHTML = "";
         document.body.classList.remove("dark-mode");
         this.showStatus("Logged out", "success");
+        this.socket.emit("user-offline", "anonymous");
     }
 
     /* ============================
        STATUS MESSAGE
        ============================ */
     showStatus(message, type = "info") {
-        const el = document.getElementById("statusMessage");
+        const el = this.elements.statusMessage;
+        if (!el) return;
         el.textContent = message;
         el.className = `status-message status-${type}`;
         el.style.display = "block";
-
-        setTimeout(() => {
-            el.style.display = "none";
-        }, 4000);
+        setTimeout(() => { el.style.display = "none"; }, 3500);
     }
 
     /* ============================
@@ -1060,13 +1068,24 @@ class ChatClient {
     getChatId(a, b) {
         return [a, b].sort().join("_");
     }
+
+    escapeHtml(str) {
+        if (!str) return "";
+        return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    escapeRegExp(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
 }
 
-/* ============================
-   INITIALIZE CLIENT
-   ============================ */
+/* Initialize */
 let chatClient;
-
 document.addEventListener("DOMContentLoaded", () => {
     chatClient = new ChatClient();
 });
