@@ -44,9 +44,15 @@ if (!fsSync.existsSync(UPLOAD_DIR)) {
 // });
 //
 // Replace with a placeholder route so clients get a clear response:
-app.post("/api/upload", (req, res) => {
-  res.status(501).json({ success: false, error: "File uploads are disabled on this deployment." });
+// File upload route disabled because multer is not available in this deployment.
+// If you want to re-enable uploads, install multer and restore the original route.
+app.post('/api/upload', (req, res) => {
+  res.status(501).json({
+    success: false,
+    error: "File uploads are disabled on this deployment. Install multer or re-enable upload code."
+  });
 });
+
 
 
 // Middleware
