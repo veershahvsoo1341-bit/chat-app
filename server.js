@@ -21,19 +21,33 @@ if (!fsSync.existsSync(UPLOAD_DIR)) {
     fsSync.mkdirSync(UPLOAD_DIR);
 }
 
-// Multer for file uploads (images, files, voice)
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, UPLOAD_DIR);
-    },
-    filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname);
-        const base = path.basename(file.originalname, ext).replace(/\s+/g, '_');
-        const unique = Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-        cb(null, `${base}_${unique}${ext}`);
-    }
+// const multer = require("multer"); // multer commented out because it's not installed in this environment
+
+// Multer storage and upload setup commented out to avoid runtime errors.
+// If you want to re-enable file uploads later, uncomment and install multer:
+// const storage = multer.diskStorage({
+//   destination: function (req, file, cb) {
+//     cb(null, "uploads/");
+//   },
+//   filename: function (req, file, cb) {
+//     cb(null, Date.now() + "-" + file.originalname);
+//   }
+// });
+// const upload = multer({ storage });
+
+// If your code had an upload route using `upload.single(...)` or `upload.array(...)`,
+// comment those routes too. Example replacement for an upload route:
+//
+// app.post("/api/upload", upload.single("file"), (req, res) => {
+//   // file handling logic
+//   res.json({ success: true });
+// });
+//
+// Replace with a placeholder route so clients get a clear response:
+app.post("/api/upload", (req, res) => {
+  res.status(501).json({ success: false, error: "File uploads are disabled on this deployment." });
 });
-const upload = multer({ storage });
+
 
 // Middleware
 app.use(express.json());
